@@ -10,7 +10,7 @@ from collections import defaultdict
 
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-CHANNEL_ID = int(os.getenv('CHANNEL_ID'))
+CHANNEL_ID = 1417468571637776397
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="/", intents=intents)
