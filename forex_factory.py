@@ -3,7 +3,7 @@ import urllib.request
 import ssl
 import pandas as pd
 import pytz
-from datetime import datetime
+from datetime import datetime, timezone
 
 class PyEcoCal:
     def __init__(self):
@@ -44,7 +44,43 @@ class PyEcoCal:
             event_td = row.find("td", class_="calendar__event")
             event = event_td.text.strip() if event_td else ""
             time_td = row.find("td", class_="calendar__time")
-            time_eastern = time_td.text.strip() if time_td else ""
+            time_label = time_td.text.strip() if time_td else ""
+            # Use timezone-agnostic unix timestamp provided by FF
+            timestamp_utc = None
+            if time_td:
+                # Common attribute on FF
+                if time_td.has_attr("data-timestamp"):
+                    try:
+                        timestamp_utc = int(time_td.get("data-timestamp"))
+                    except Exception:
+                        timestamp_utc = None
+                # Fallback: look for any plausible epoch-like attribute
+                if timestamp_utc is None:
+                    try:
+                        # Check own attributes
+                        for k, v in time_td.attrs.items():
+                            if isinstance(v, list):
+                                v = v[0]
+                            if k and ("timestamp" in k or "sort" in k or "epoch" in k):
+                                if str(v).isdigit() and len(str(v)) >= 10:
+                                    timestamp_utc = int(str(v)[:10])
+                                    break
+                        # Search descendants for similar attributes
+                        if timestamp_utc is None:
+                            for el in time_td.descendants:
+                                if hasattr(el, 'attrs'):
+                                    for k, v in el.attrs.items():
+                                        if isinstance(v, list):
+                                            v = v[0]
+                                        if k and ("timestamp" in k or "sort" in k or "epoch" in k):
+                                            sv = str(v)
+                                            if sv.isdigit() and len(sv) >= 10:
+                                                timestamp_utc = int(sv[:10])
+                                                break
+                                    if timestamp_utc is not None:
+                                        break
+                    except Exception:
+                        timestamp_utc = None
             impact = ""
             impact_td = row.find("td", class_="calendar__impact")
             if impact_td:
@@ -72,10 +108,11 @@ class PyEcoCal:
             if prev_td:
                 previous = prev_td.text.strip()
             data.append({
-                "Date": current_date,
+                "Date": current_date,                     # As shown by site (may vary by env)
                 "Currency": currency,
                 "Event": event,
-                "Time_Eastern": time_eastern,
+                "Time_Eastern": time_label,               # Kept for backward compatibility/display
+                "Timestamp_UTC": timestamp_utc,           # New: robust reference time
                 "Impact": impact,
                 "Actual": actual,
                 "Forecast": forecast,
@@ -92,15 +129,36 @@ if __name__ == "__main__":
     if df_high.empty:
         print("No high-impact events found or impact detection failed.")
     else:
-        # Forward fill missing times in Time_Eastern
+        # Forward fill missing label times for readability
         df_high['Time_Eastern'] = df_high['Time_Eastern'].replace('', pd.NA).ffill()
-        # Convert Time_Eastern to IST
 
+        # Demonstrate normalization using UTC timestamp -> Eastern
         eastern = pytz.timezone('US/Eastern')
-        ist = pytz.timezone('Asia/Kolkata')
-        # Remove IST conversion
-        
-        today_str = datetime.now().strftime('%a %b %d')
-        df_today = df_high[df_high['Date'] == today_str].reset_index(drop=True)
-        print(f"Today's high-impact events ({today_str}):")
+        now_et = datetime.now(eastern)
+        today_et = now_et.date()
+
+        def to_et_str(ts):
+            if pd.isna(ts):
+                return None
+            try:
+                dt = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(eastern)
+                return dt.strftime('%I:%M %p')
+            except Exception:
+                return None
+
+        df_high['Time_ET_fromUTC'] = df_high['Timestamp_UTC'].apply(to_et_str)
+
+        # Filter to today's events by converting timestamp to Eastern date
+        def is_today(ts):
+            if pd.isna(ts):
+                return False
+            try:
+                dt = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(eastern)
+                return dt.date() == today_et
+            except Exception:
+                return False
+
+        df_today = df_high[df_high['Timestamp_UTC'].apply(is_today)].reset_index(drop=True)
+        today_str = now_et.strftime('%a %b %d')
+        print(f"Today's high-impact events ({today_str}) [normalized to ET]:")
         print(df_today)
