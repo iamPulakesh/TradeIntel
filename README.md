@@ -8,9 +8,9 @@
 - 🇺🇸  Displays currency flags and event details (forecast, previous, actual values).
 
 ## ⚙️ Tech Stack
-🖥️ Pycord (discord, discord.ext.commands, discord.ext.tasks)
-📄 BeautifulSoup (HTML parsing)
-📊 pandas (data handling)
+- 🖥️ Pycord (discord, discord.ext.commands, discord.ext.tasks)
+- 📄 BeautifulSoup (HTML parsing)
+- 📊 pandas (data handling)
 
 ## 📁 Project Structure
 
