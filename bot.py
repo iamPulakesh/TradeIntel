@@ -82,7 +82,7 @@ async def on_ready():
 # =========================
 # Daily auto-post task
 # =========================
-@tasks.loop(time=datetime.strptime("17:37", "%H:%M").time())
+@tasks.loop(time=datetime.strptime("09:04", "%H:%M").time())
 async def daily_events():
     channel = bot.get_channel(CHANNEL_ID)
     if channel is None:
