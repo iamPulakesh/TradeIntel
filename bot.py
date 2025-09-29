@@ -1,15 +1,29 @@
 import discord
 import pandas as pd
 import os
-from dotenv import load_dotenv
+import boto3
+from botocore.exceptions import ClientError
 from discord.ext import commands, tasks
 from forex_factory import PyEcoCal
 import pytz
 from datetime import datetime, timezone
 from collections import defaultdict
 
-load_dotenv()
-DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+def get_discord_token_from_ssm(param_name: str, region: str = None) -> str:
+    
+    try:
+        ssm = boto3.client('ssm', region_name=region)
+        response = ssm.get_parameter(Name=param_name, WithDecryption=True)
+        return response['Parameter']['Value']
+    except ClientError as e:
+        print(f"[ERROR] Failed to fetch Discord token from SSM: {e}")
+        return None
+
+SSM_PARAM_NAME = os.getenv('DISCORD_BOT_TOKEN_PARAM', '/tradeintel/discord/token')
+AWS_REGION = os.getenv('AWS_REGION', 'ap-south-1')
+DISCORD_BOT_TOKEN = get_discord_token_from_ssm(SSM_PARAM_NAME, AWS_REGION)
+if not DISCORD_BOT_TOKEN:
+    raise RuntimeError("DISCORD_BOT_TOKEN could not be retrieved from AWS SSM Parameter Store.")
 CHANNEL_ID = 1417468571637776397
 
 intents = discord.Intents.default()
