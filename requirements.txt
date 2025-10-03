@@ -3,8 +3,11 @@ aiohttp==3.12.15
 aiosignal==1.4.0
 attrs==25.3.0
 beautifulsoup4==4.13.5
+boto3==1.40.44
+botocore==1.40.44
 frozenlist==1.7.0
 idna==3.10
+jmespath==1.0.1
 lxml==6.0.1
 multidict==6.6.4
 numpy==2.0.2
@@ -14,8 +17,10 @@ py-cord==2.6.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.1
 pytz==2025.2
+s3transfer==0.14.0
 six==1.17.0
 soupsieve==2.8
 typing_extensions==4.15.0
 tzdata==2025.2
+urllib3==2.5.0
 yarl==1.20.1
