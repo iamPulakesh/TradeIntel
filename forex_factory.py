@@ -16,7 +16,7 @@ class PyEcoCal:
         ssl._create_default_https_context = ssl._create_unverified_context
         url = baseURL + date_path
         opener = urllib.request.build_opener()
-        opener.addheaders = [('User-agent', 'Mozilla/5.0')]
+        opener.addheaders = [('User-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')]
         response = opener.open(url)
         html = response.read().decode('utf-8', errors='replace')
         soup = BeautifulSoup(html, "html.parser")
@@ -125,9 +125,9 @@ class PyEcoCal:
 
 if __name__ == "__main__":
     eco = PyEcoCal()
-    df_high = eco.GetEconomicCalendar("calendar")
+    df_high = eco.GetEconomicCalendar("calendar?week=this")
     if df_high.empty:
-        print("No high-impact events found or impact detection failed.")
+        print("No high-impact events found for the current week.")
     else:
         # Forward fill missing label times for readability
         df_high['Time_Eastern'] = df_high['Time_Eastern'].replace('', pd.NA).ffill()
@@ -135,8 +135,7 @@ if __name__ == "__main__":
         # Demonstrate normalization using UTC timestamp -> Eastern
         eastern = pytz.timezone('US/Eastern')
         now_et = datetime.now(eastern)
-        today_et = now_et.date()
-
+        
         def to_et_str(ts):
             if pd.isna(ts):
                 return None
@@ -148,17 +147,6 @@ if __name__ == "__main__":
 
         df_high['Time_ET_fromUTC'] = df_high['Timestamp_UTC'].apply(to_et_str)
 
-        # Filter to today's events by converting timestamp to Eastern date
-        def is_today(ts):
-            if pd.isna(ts):
-                return False
-            try:
-                dt = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(eastern)
-                return dt.date() == today_et
-            except Exception:
-                return False
-
-        df_today = df_high[df_high['Timestamp_UTC'].apply(is_today)].reset_index(drop=True)
-        today_str = now_et.strftime('%a %b %d')
-        print(f"Today's high-impact events ({today_str}) [normalized to ET]:")
-        print(df_today)
+        # No longer filtering for just today, showing the whole week.
+        print(f"This week's high-impact events [normalized to ET]:")
+        print(df_high)

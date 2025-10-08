@@ -90,65 +90,61 @@ async def daily_events():
         return
 
     eco = PyEcoCal()
-    df_high = eco.GetEconomicCalendar("calendar")
+
+    df_high = eco.GetEconomicCalendar("calendar?week=this")
+    print("[DEBUG] df_high from daily_events:")
+    print(df_high)
     if df_high.empty:
-        await channel.send("No high-impact events found or impact detection failed.")
+        await channel.send("No high-impact events found for the current week.")
         return
 
     df_high['Time_Eastern'] = df_high['Time_Eastern'].replace('', pd.NA).ffill()
 
-    # Group events by their date (today only)
+    # Group events by their date
     grouped = defaultdict(list)
     now_tz = datetime.now(TARGET_TZ)
-    today_str = now_tz.strftime('%a %b %d')
 
-    # Use only robust UTC timestamp for filtering and conversion
-    def to_et(ts):
+
+    def parse_event_datetime(row):
+        # Try UTC timestamp first
+        ts = row.get('Timestamp_UTC')
+        if ts and str(ts).isdigit():
+            try:
+                return datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(TARGET_TZ)
+            except Exception:
+                pass
+        # Fallback: parse from Date and Time_Eastern
+        date_str = str(row.get('Date', '')).strip()
+        time_str = str(row.get('Time_Eastern', '')).strip().replace(' ', '')
+        if not date_str or not time_str or time_str.lower() == 'tentative':
+            return None
         try:
-            return datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(TARGET_TZ)
+            # Example: 'Wed Oct 08', '6:30am' or '8:30pm'
+            dt_str = f"{date_str} {time_str.upper()}"
+            dt = datetime.strptime(dt_str, "%a %b %d %I:%M%p")
+            # Assume current year
+            dt = dt.replace(year=datetime.now().year)
+            return TARGET_TZ.localize(dt)
         except Exception:
             return None
 
-    df_high['__et_dt'] = df_high['Timestamp_UTC'].apply(to_et)
-    if DEBUG_EVENTS:
-        print("[daily_events] sample timestamps -> ET:")
-        print(df_high[['Date','Currency','Event','Timestamp_UTC']].head(10))
-        print(df_high['__et_dt'].head(10))
-    # Strict: compute mask in one pass to guard against None
-    mask_today = df_high['__et_dt'].apply(lambda d: (d is not None) and (d.date() == now_tz.date()))
-    df_today = df_high[mask_today].reset_index(drop=True)
-    if DEBUG_EVENTS:
-        print(f"[daily_events] now_tz date: {now_tz.date()}  rows today: {len(df_today)} / {len(df_high)}")
-
-    # Fallback: if nothing matched via UTC timestamps, try page labels for today's date only
-    if df_today.empty:
-        def parse_label_et(s: str):
-            try:
-                dt_naive = datetime.strptime(str(s).strip(), "%I:%M%p")
-                return TARGET_TZ.localize(datetime.combine(now_tz.date(), dt_naive.time()))
-            except Exception:
-                return None
-        df_lbl = df_high[df_high['Date'] == today_str].copy()
-        df_lbl['__et_dt'] = df_lbl['Time_Eastern'].apply(parse_label_et)
-        df_today = df_lbl[df_lbl['__et_dt'].notna()].reset_index(drop=True)
-        if DEBUG_EVENTS:
-            print(f"[daily_events] fallback label-based rows today: {len(df_today)}")
+    df_high['__dt_obj'] = df_high.apply(parse_event_datetime, axis=1)
+    # Filter for today's events only
+    today = now_tz.date()
+    df_today = df_high[df_high['__dt_obj'].apply(lambda d: d and d.date() == today)].copy()
 
     if df_today.empty:
-        await channel.send(f"No high-impact events for today ({today_str}).")
+        await channel.send(f"No high-impact events for today ({now_tz.strftime('%a %b %d')}).")
         return
 
-    # Parse each row into event objects
+    # Group and display today's events
+    grouped = defaultdict(list)
     for _, row in df_today.iterrows():
-        dt_eastern = row['__et_dt']
-        if dt_eastern is None:
-            continue
-
-        # Force grouping under today's label only
-        grouped[today_str].append({
+        dt_obj = row['__dt_obj']
+        grouped[today.strftime('%a %b %d')].append({
             'currency': row['Currency'],
             'event': row['Event'],
-            'time_eastern': dt_eastern,
+            'time_obj': dt_obj,
             'forecast': row.get('Forecast', 'N/A'),
             'previous': row.get('Previous', 'N/A'),
             'actual': row.get('Actual', '')
@@ -156,96 +152,87 @@ async def daily_events():
 
     tz_abbr = now_tz.strftime('%Z') or os.getenv('EVENTS_TZ', 'Asia/Kolkata')
     embed = discord.Embed(
-        title=f"🔴 High-Impact Forex Events ({today_str}) — Times in {tz_abbr}",
+        title=f"🔴 Today's High-Impact Forex Events ({today.strftime('%a %b %d')}) — Times in {tz_abbr}",
         color=discord.Color.red()
     )
 
-    # Sort and add to embed
-    for date_str, events in grouped.items():
-        events.sort(key=lambda e: e['time_eastern'])
-        section_text = ""
-        for ev in events:
-                est_str = ev['time_eastern'].strftime("%I:%M %p")
-                flag = flag_map.get(ev['currency'], '')
-
-                section_text += (
-                    f"{flag} **{ev['currency']} - {ev['event']}**\n"
-                    f"⏰ {est_str}\n"
-                    f"📊 Forecast: {ev['forecast']} | 📈 Previous: {ev['previous']}\n"
-                )
-                if ev['actual']:
-                    section_text += f"✅ Actual: {ev['actual']}\n"
-                section_text += "\n"
-
-        embed.add_field(
-            name=f"📌 {date_str}",
-            value=section_text.strip(),
-            inline=True
+    events = grouped[today.strftime('%a %b %d')]
+    events.sort(key=lambda e: e['time_obj'])
+    section_text = ""
+    for ev in events:
+        time_str = ev['time_obj'].strftime("%I:%M %p")
+        flag = flag_map.get(ev['currency'], '')
+        section_text += (
+            f"{flag} **{ev['currency']} - {ev['event']}**\n"
+            f"⏰ {time_str}\n"
+            f"📊 Forecast: {ev['forecast']} | 📈 Previous: {ev['previous']}\n"
         )
-
+        if ev['actual']:
+            section_text += f"✅ Actual: {ev['actual']}\n"
+        section_text += "\n"
+    embed.add_field(
+        name=f"📌 {today.strftime('%a %b %d')}",
+        value=section_text.strip(),
+        inline=False
+    )
     await channel.send(embed=embed)
 
 
 # =========================
 # Slash command: /events
 # =========================
-@bot.slash_command(name="events", description="Show today's high-impact ForexFactory events with IST time")
+@bot.slash_command(name="events", description="Show this week's high-impact ForexFactory events")
 async def events(ctx):
     eco = PyEcoCal()
-    df_high = eco.GetEconomicCalendar("calendar")
+
+    df_high = eco.GetEconomicCalendar("calendar?week=this")
+    print("[DEBUG] df_high from /events command:")
+    print(df_high)
     if df_high.empty:
-        await ctx.send("No high-impact events found or impact detection failed.")
+        await ctx.send("No high-impact events found for the current week.")
         return
 
     df_high['Time_Eastern'] = df_high['Time_Eastern'].replace('', pd.NA).ffill()
 
     grouped = defaultdict(list)
     now_tz = datetime.now(TARGET_TZ)
-    today_str = now_tz.strftime('%a %b %d')
 
-    def to_et(ts):
+
+    def parse_event_datetime(row):
+        ts = row.get('Timestamp_UTC')
+        if ts and str(ts).isdigit():
+            try:
+                return datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(TARGET_TZ)
+            except Exception:
+                pass
+        date_str = str(row.get('Date', '')).strip()
+        time_str = str(row.get('Time_Eastern', '')).strip().replace(' ', '')
+        if not date_str or not time_str or time_str.lower() == 'tentative':
+            return None
         try:
-            return datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(TARGET_TZ)
+            dt_str = f"{date_str} {time_str.upper()}"
+            dt = datetime.strptime(dt_str, "%a %b %d %I:%M%p")
+            dt = dt.replace(year=datetime.now().year)
+            return TARGET_TZ.localize(dt)
         except Exception:
             return None
 
-    df_high['__et_dt'] = df_high['Timestamp_UTC'].apply(to_et)
-    if DEBUG_EVENTS:
-        print("[/events] sample timestamps -> ET:")
-        print(df_high[['Date','Currency','Event','Timestamp_UTC']].head(10))
-        print(df_high['__et_dt'].head(10))
-    mask_today = df_high['__et_dt'].apply(lambda d: (d is not None) and (d.date() == now_tz.date()))
-    df_today = df_high[mask_today].reset_index(drop=True)
-    if DEBUG_EVENTS:
-        print(f"[/events] now_tz date: {now_tz.date()}  rows today: {len(df_today)} / {len(df_high) if isinstance(df_high, pd.DataFrame) else 'NA'}")
-
-    # Fallback: if nothing matched via UTC timestamps, try page labels for today's date only
-    if df_today.empty:
-        def parse_label_et(s: str):
-            try:
-                dt_naive = datetime.strptime(str(s).strip(), "%I:%M%p")
-                return TARGET_TZ.localize(datetime.combine(now_tz.date(), dt_naive.time()))
-            except Exception:
-                return None
-        df_lbl = df_high[df_high['Date'] == today_str].copy()
-        df_lbl['__et_dt'] = df_lbl['Time_Eastern'].apply(parse_label_et)
-        df_today = df_lbl[df_lbl['__et_dt'].notna()].reset_index(drop=True)
-        if DEBUG_EVENTS:
-            print(f"[/events] fallback label-based rows today: {len(df_today)}")
+    df_high['__dt_obj'] = df_high.apply(parse_event_datetime, axis=1)
+    # Filter for today's events only
+    today = now_tz.date()
+    df_today = df_high[df_high['__dt_obj'].apply(lambda d: d and d.date() == today)].copy()
 
     if df_today.empty:
-        await ctx.send(f"No high-impact events for today ({today_str}).")
+        await ctx.send(f"No high-impact events for today ({now_tz.strftime('%a %b %d')}).")
         return
 
+    grouped = defaultdict(list)
     for _, row in df_today.iterrows():
-        dt_eastern = row['__et_dt']
-        if dt_eastern is None:
-            continue
-
-        grouped[today_str].append({
+        dt_obj = row['__dt_obj']
+        grouped[today.strftime('%a %b %d')].append({
             'currency': row['Currency'],
             'event': row['Event'],
-            'time_eastern': dt_eastern,
+            'time_obj': dt_obj,
             'forecast': row.get('Forecast', 'N/A'),
             'previous': row.get('Previous', 'N/A'),
             'actual': row.get('Actual', '')
@@ -253,32 +240,29 @@ async def events(ctx):
 
     tz_abbr = now_tz.strftime('%Z') or os.getenv('EVENTS_TZ', 'Asia/Kolkata')
     embed = discord.Embed(
-        title=f"🔴 High-Impact Forex Events ({today_str}) — Times in {tz_abbr}",
+        title=f"🔴 Today's High-Impact Forex Events ({today.strftime('%a %b %d')}) — Times in {tz_abbr}",
         color=discord.Color.red()
     )
 
-    for date_str, events in grouped.items():
-        events.sort(key=lambda e: e['time_eastern'])
-        section_text = ""
-        for ev in events:
-                est_str = ev['time_eastern'].strftime("%I:%M %p")
-                flag = flag_map.get(ev['currency'], '')
-
-                section_text += (
-                    f"{flag} **{ev['currency']} - {ev['event']}**\n"
-                    f"⏰ {est_str}\n"
-                    f"📊 Forecast: {ev['forecast']} | 📈 Previous: {ev['previous']}\n"
-                )
-                if ev['actual']:
-                    section_text += f"✅ Actual: {ev['actual']}\n"
-                section_text += "\n"
-
-        embed.add_field(
-            name=f"📌 {date_str}",
-            value=section_text.strip(),
-            inline=True
+    events = grouped[today.strftime('%a %b %d')]
+    events.sort(key=lambda e: e['time_obj'])
+    section_text = ""
+    for ev in events:
+        time_str = ev['time_obj'].strftime("%I:%M %p")
+        flag = flag_map.get(ev['currency'], '')
+        section_text += (
+            f"{flag} **{ev['currency']} - {ev['event']}**\n"
+            f"⏰ {time_str}\n"
+            f"📊 Forecast: {ev['forecast']} | 📈 Previous: {ev['previous']}\n"
         )
-
+        if ev['actual']:
+            section_text += f"✅ Actual: {ev['actual']}\n"
+        section_text += "\n"
+    embed.add_field(
+        name=f"📌 {today.strftime('%a %b %d')}",
+        value=section_text.strip(),
+        inline=False
+    )
     await ctx.send(embed=embed)
 
 
